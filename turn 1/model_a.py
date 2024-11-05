@@ -1,55 +1,64 @@
 import pandas as pd
-import matplotlib.pyplot as plt
-from statsmodels.tsa.arima_model import ARIMA
-from statsmodels.tsa.stattools import adfuller
-from sklearn.metrics import mean_squared_error
 import numpy as np
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_squared_error
+import matplotlib.pyplot as plt
+from pmdarima import auto_arima
 
-# Sample historical data (replace this with your actual dataset)
-data = {
-    'Date': ['2022-01-01', '2022-02-01', '2022-03-01', '2022-04-01', '2022-05-01', '2022-06-01', '2022-07-01'],
-    'Ticket_Sales': [1000, 1200, 1500, 1800, 2000, 1600, 1400]
-}
-df = pd.DataFrame(data)
-df['Date'] = pd.to_datetime(df['Date'])
-df = df.set_index('Date')
-
-
-def is_stationary(timeseries):
-    result = adfuller(timeseries)
-    print('ADF Statistic: %f' % result[0])
-    print('p-value: %f' % result[1])
-    for key, value in result[4].items():
-        print('Critical Value (%s): %f' % (key, value))
-    # p-value > 0.05: Fail to reject the null hypothesis (Non-stationary)
-    return result[1] > 0.05
+# Dummy data for sales of a toy over the past 12 months
+np.random.seed(0)
+date_range = pd.date_range(start='2023-01-01', periods=12, freq='MS')
+sales_data = np.cumsum(np.random.randint(low=100, high=200, size=12))
+data = pd.DataFrame({'Date': date_range, 'Sales': sales_data})
+data = data.set_index('Date')
 
 
-def predict_sales(data, order=(5, 1, 0)):
-    # Make the time series stationary
-    if not is_stationary(data):
-        data = data.diff().dropna()
+def predict_sales(data, forecast_period=3):
+    # Perform time series analysis and forecast future sales
 
-    model = ARIMA(data, order=order)
-    model_fit = model.fit()
+    # Step 1: Define the p,d,q parameters using auto_arima
+    stepwise_fit = auto_arima(data['Sales'],
+                              start_p=1, start_q=1,
+                              max_p=3, max_q=3, m=12,
+                              start_P=0, seasonal=True,
+                              d=1, D=1, trace=True,
+                              error_action='ignore',
+                              suppress_warnings=True,
+                              stepwise=True)
 
-    forecast = model_fit.forecast(steps=3)[0]
-    return forecast
+    # Step 2: Summarize the model
+    print(stepwise_fit.summary())
+
+    # Step 3: Make predictions
+    n_periods = forecast_period
+    fc, confint = stepwise_fit.predict(n_periods=n_periods, return_conf_int=True)
+    index_of_fc = pd.date_range(start=data.index[-1] + pd.DateOffset(1), periods=n_periods, freq=data.index.freq)
+
+    # step 4: create a Dataframe for the forecast
+    forecast_set = pd.DataFrame(fc, index=index_of_fc, columns=['Forecast'])
+    lower_bound = pd.DataFrame(confint[:, 0], index=index_of_fc, columns=['lower_bound'])
+    upper_bound = pd.DataFrame(confint[:, 1], index=index_of_fc, columns=['upper_bound'])
+    forecast_set = pd.concat([forecast_set, lower_bound, upper_bound], axis=1)
+
+    return forecast_set
 
 
-# Check for stationarity
-print("Is stationary:", is_stationary(df['Ticket_Sales']))
+# Display the dummy data
+print("Historical Sales Data:")
+print(data)
 
 # Predict future sales
-predicted_sales = predict_sales(df['Ticket_Sales'])
+forecast = predict_sales(data, forecast_period=4)
 
-# Visualize results
+print("\nForecasted Sales:")
+print(forecast)
+
+# Visualization
 plt.figure(figsize=(10, 6))
-plt.plot(df.index, df['Ticket_Sales'], label='Historical Sales')
-plt.plot(df.index[-1] + pd.DateOffset(months=1), predicted_sales, label='Predicted Sales', color='red')
+plt.plot(data.index, data['Sales'], label='Historical Sales')
+plt.plot(forecast.index, forecast['Forecast'], label='Forecast', color='red')
+plt.fill_between(forecast.index,
+                 forecast['lower_bound'],
+                 forecast['upper_bound'], color='k', alpha=.15)
 plt.legend()
 plt.show()
-
-# Calculate RMSE
-rmse = np.sqrt(mean_squared_error(df['Ticket_Sales'][-len(predicted_sales):], predicted_sales))
-print("RMSE:", rmse)
